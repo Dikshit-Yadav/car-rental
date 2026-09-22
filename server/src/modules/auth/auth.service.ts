@@ -1,17 +1,28 @@
 import { AppError } from "../../common/errors/AppError.js";
 import { ERROR } from "../../common/errors/errors.js";
-import {
-  generateAccessToken,
-  generateRefreshToken,
-} from "../../common/utils/jwt.js";
 import { hashPassword } from "../../common/utils/password.js";
 import {
   createUser,
   findUserByEmail,
+  findUserByEmailWithPassword,
   findUserByPhone,
 } from "./auth.repository.js";
 import { registerSchema } from "./auth.schema.js";
 import type { RegisterInput } from "./auth.types.js";
+import { createAuthTokens } from "./auth.tokens.js";
+import { comparePassword } from "../../common/utils/password.js";
+import { loginSchema } from "./auth.schema.js";
+import type { LoginInput } from "./auth.types.js";
+import {
+  findRefreshToken,
+  revokeRefreshToken,
+} from "./auth.repository.js";
+
+import {
+  verifyRefreshToken,
+} from "../../common/utils/jwt.js";
+
+import { hashToken } from "../../common/utils/token-hash.js";
 
 export const registerUser = async (input: RegisterInput) => {
   const validatedData = registerSchema.parse(input);
@@ -43,15 +54,7 @@ export const registerUser = async (input: RegisterInput) => {
     dateOfBirth: new Date(validatedData.dateOfBirth),
   });
 
-  const accessToken = generateAccessToken({
-    userId: user._id.toString(),
-    role: user.role,
-  });
-
-  const refreshToken = generateRefreshToken({
-    userId: user._id.toString(),
-    role: user.role,
-  });
+  const tokens = await createAuthTokens(user._id.toString(), user.role);
 
   return {
     user: {
@@ -65,9 +68,126 @@ export const registerUser = async (input: RegisterInput) => {
       isActive: user.isActive,
       createdAt: user.createdAt,
     },
-    tokens: {
-      accessToken,
-      refreshToken,
-    },
+
+    tokens,
   };
+};
+
+export const loginUser = async (input: LoginInput) => {
+  const validatedData = loginSchema.parse(input);
+
+  const user = await findUserByEmailWithPassword(validatedData.email);
+
+  if (!user) {
+    throw new AppError("Invalid email or password", 401, ERROR.UNAUTHORIZED);
+  }
+
+  if (!user.isActive) {
+    throw new AppError("User account is inactive", 403, ERROR.FORBIDDEN);
+  }
+
+  const passwordMatches = await comparePassword(
+    validatedData.password,
+    user.password,
+  );
+
+  if (!passwordMatches) {
+    throw new AppError("Invalid email or password", 401, ERROR.UNAUTHORIZED);
+  }
+
+  const tokens = await createAuthTokens(user._id.toString(), user.role);
+
+  return {
+    user: {
+      id: user._id.toString(),
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      drivingLicense: user.drivingLicense,
+      dateOfBirth: user.dateOfBirth,
+      role: user.role,
+      isActive: user.isActive,
+      createdAt: user.createdAt,
+    },
+
+    tokens,
+  };
+};
+
+export const refreshAuthTokens = async (
+  refreshToken: string
+) => {
+  const payload = verifyRefreshToken(refreshToken);
+
+  const tokenHash = hashToken(refreshToken);
+
+  const storedToken = await findRefreshToken(
+    tokenHash
+  );
+
+  if (!storedToken) {
+    throw new AppError(
+      "Refresh token is invalid",
+      401,
+      ERROR.UNAUTHORIZED
+    );
+  }
+
+  if (storedToken.revokedAt) {
+    throw new AppError(
+      "Refresh token has already been revoked",
+      401,
+      ERROR.UNAUTHORIZED
+    );
+  }
+
+  if (storedToken.expiresAt.getTime() < Date.now()) {
+    throw new AppError(
+      "Refresh token has expired",
+      401,
+      ERROR.UNAUTHORIZED
+    );
+  }
+
+  if (
+    storedToken.userId.toString() !== payload.userId
+  ) {
+    throw new AppError(
+      "Invalid refresh token",
+      401,
+      ERROR.UNAUTHORIZED
+    );
+  }
+
+  await revokeRefreshToken(
+    storedToken._id.toString()
+  );
+
+  // generate and store a completely new token pair.
+  return createAuthTokens(
+    payload.userId,
+    payload.role
+  );
+};
+
+export const logoutUser = async (
+  refreshToken: string
+): Promise<void> => {
+  const tokenHash = hashToken(refreshToken);
+
+  const storedToken = await findRefreshToken(
+    tokenHash
+  );
+
+  if (!storedToken) {
+    return;
+  }
+
+  if (storedToken.revokedAt) {
+    return;
+  }
+
+  await revokeRefreshToken(
+    storedToken._id.toString()
+  );
 };
