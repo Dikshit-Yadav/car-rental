@@ -6,6 +6,7 @@ import {
   findUserByEmail,
   findUserByEmailWithPassword,
   findUserByPhone,
+  rotateRefreshToken,
 } from "./auth.repository.js";
 import { registerSchema } from "./auth.schema.js";
 import type { RegisterInput } from "./auth.types.js";
@@ -121,29 +122,13 @@ export const refreshAuthTokens = async (
 
   const tokenHash = hashToken(refreshToken);
 
-  const storedToken = await findRefreshToken(
+  const storedToken = await rotateRefreshToken(
     tokenHash
   );
 
   if (!storedToken) {
     throw new AppError(
-      "Refresh token is invalid",
-      401,
-      ERROR.UNAUTHORIZED
-    );
-  }
-
-  if (storedToken.revokedAt) {
-    throw new AppError(
-      "Refresh token has already been revoked",
-      401,
-      ERROR.UNAUTHORIZED
-    );
-  }
-
-  if (storedToken.expiresAt.getTime() < Date.now()) {
-    throw new AppError(
-      "Refresh token has expired",
+      "Refresh token is invalid, expired, or already used",
       401,
       ERROR.UNAUTHORIZED
     );
@@ -159,11 +144,6 @@ export const refreshAuthTokens = async (
     );
   }
 
-  await revokeRefreshToken(
-    storedToken._id.toString()
-  );
-
-  // generate and store a completely new token pair.
   return createAuthTokens(
     payload.userId,
     payload.role

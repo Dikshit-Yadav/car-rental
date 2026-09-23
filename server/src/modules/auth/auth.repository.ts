@@ -42,16 +42,46 @@ export const findRefreshToken = async (tokenHash: string) => {
   });
 };
 
+export const rotateRefreshToken = async (
+  tokenHash: string
+) => {
+  return RefreshToken.findOneAndUpdate(
+    {
+      tokenHash,
+      revokedAt: null,
+      expiresAt: {
+        $gt: new Date(),
+      },
+    },
+    {
+      $set: {
+        revokedAt: new Date(),
+      },
+    },
+    {
+      new: false,
+    }
+  );
+};
+
 export const revokeRefreshToken = async (
-  refreshTokenId: string,
+  refreshTokenId: string
 ): Promise<void> => {
-  await RefreshToken.findByIdAndUpdate(refreshTokenId, {
-    revokedAt: new Date(),
-  });
+  await RefreshToken.findOneAndUpdate(
+    {
+      _id: refreshTokenId,
+      revokedAt: null,
+    },
+    {
+      $set: {
+        revokedAt: new Date(),
+      },
+    }
+  );
 };
 
 export const deleteRefreshToken = async (
-  refreshTokenId: string,
+  refreshTokenId: string
 ): Promise<void> => {
   await RefreshToken.findByIdAndDelete(refreshTokenId);
 };
